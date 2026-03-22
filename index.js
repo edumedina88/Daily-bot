@@ -68,7 +68,7 @@ Mesa de Dinero - uso exclusivo clientes`;
     });
 
     const data = await response.json();
-    const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+    const text = data.content ? data.content.filter(b => b.type === 'text').map(b => b.text).join('') : JSON.stringify(data);
 
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     await client.messages.create({
