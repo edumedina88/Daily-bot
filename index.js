@@ -17,19 +17,31 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-async function fetchPPI() {
+async function fetchResearch() {
   try {
     const listResp = await fetch('https://www.portfoliopersonal.com/research/informes', { headers: { 'User-Agent': 'Mozilla/5.0' } });
     const listHtml = await listResp.text();
-    const match = listHtml.match(/href="(\/research\/informes\/[^"]+Cierre[^"]+)"/i) || listHtml.match(/href="(\/research\/informes\/[^"]+)"/);
-    if (!match) return '';
-    const url = 'https://www.portfoliopersonal.com' + match[1];
-    const pageResp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const html = await pageResp.text();
-    const bodyMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i) || html.match(/class="content"[^>]*>([\s\S]{200,3000})/i);
-    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 4000);
-    return text;
+    const linkMatch = listHtml.match(/href="(\/research\/informes\/[^"]*[Cc]ierre[^"]*)"/) || listHtml.match(/href="(\/research\/informes\/[^"]+)"/);
+    if (!linkMatch) return '';
+    const pageUrl = 'https://www.portfoliopersonal.com' + linkMatch[1];
+    const pageResp = await fetch(pageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const pageHtml = await pageResp.text();
+    const pdfMatch = pageHtml.match(/https:\/\/cdn1\.portfoliopersonal\.com\/Attachs\/\d+\.pdf/);
+    if (!pdfMatch) {
+      const clean = pageHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+      return clean.substring(0, 4000);
+    }
+    const pdfResp = await fetch(pdfMatch[0], { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const buffer = await pdfResp.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let text = '';
+    for (let i = 0; i < bytes.length; i++) {
+      if (bytes[i] > 31 && bytes[i] < 127) text += String.fromCharCode(bytes[i]);
+    }
+    const cleaned = text.replace(/[^\x20-\x7E\n]/g, ' ').replace(/\s+/g, ' ');
+    return cleaned.substring(0, 4000);
   } catch (e) {
+    console.error('fetchResearch error:', e);
     return '';
   }
 }
@@ -37,9 +49,9 @@ async function fetchPPI() {
 async function generateDaily(to) {
   const d = new Date();
   const fecha = d.getDate() + '/' + (d.getMonth() + 1);
-  const ppiContent = await fetchPPI();
+  const research = await fetchResearch();
 
-  const prompt = 'Sos analista senior de mesa de dinero argentina. Fecha: ' + fecha + '.\n\nTenes este informe de cierre de PPI como fuente principal:\n---\n' + ppiContent.substring(0, 3000) + '\n---\n\nAdemas busca en la web noticias de hoy en Cronista, iProfesional, Ambito e Infobae sobre declaraciones de funcionarios, FMI, o novedades que muevan el mercado.\n\nEscribi un informe de maximo 7 lineas para clientes corporativos sofisticados. Cada dia adapta el orden segun lo mas importante. Formato sin markdown:\n\nINFORME DIARIO ' + fecha + '\n[La noticia o dato mas critico del dia - una oracion]\nDolar: oficial $X | CCL $X | blue $X | brecha X%\nTasas: cauciones Xd X% | Lecap corta X% | carry: X\nRofex: [mes] $X dev.impl X% TNA | int.abierto: X\nBCRA: compro USD X M | acum USD X.XXX M | reservas USD XX.XXX M\n[Noticia politica o macro relevante - una oracion]\n\nTono directo. Solo lo que mueve el amperimetro. Sin relleno.';
+  const prompt = 'Sos analista senior de mesa de dinero argentina. Fecha: ' + fecha + '.\n\nTenes este informe de cierre de mercados como fuente principal de datos:\n---\n' + research + '\n---\n\nAdemas busca en la web noticias de hoy en Cronista, iProfesional, Ambito, Infobae sobre declaraciones de funcionarios, FMI, o novedades relevantes para el mercado.\n\nCon esos datos escribi el informe. Si un dato no esta en la fuente, buscalo en la web. Nunca inventes datos ni pongas s/d si podes buscarlo.\n\nFormato estricto, sin markdown, max 7 lineas:\n\nINFORME DIARIO ' + fecha + '\n[Dato o noticia mas critica del dia]\nDolar: oficial $X | CCL $X | blue $X | brecha X%\nTasas: cauciones Xd X% | Lecap X% | carry: X\nRofex: [mes] $X | dev.impl X% TNA\nBCRA: compro USD X M | acum USD X.XXX M | reservas USD XX.XXX M\n[Noticia politica o macro clave del dia]\n\nTono: directo, Bloomberg en español. Solo lo que mueve el mercado.';
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
