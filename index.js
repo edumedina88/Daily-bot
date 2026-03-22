@@ -3,17 +3,33 @@ const twilio = require('twilio');
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
+// Memoria temporal por numero de WhatsApp
+const dailyMemory = {};
+const chatHistory = {};
+
 app.post('/webhook', async (req, res) => {
-  const msg = (req.body.Body || '').trim().toLowerCase();
+  const msg = (req.body.Body || '').trim();
+  const msgLower = msg.toLowerCase();
   const from = req.body.From;
   const twiml = new twilio.twiml.MessagingResponse();
-  if (msg === 'daily') {
+
+  if (msgLower === 'daily') {
     twiml.message('Generando informe...');
     res.type('text/xml').send(twiml.toString());
     generateDaily(from);
-  } else {
-    twiml.message('Escribi daily para el informe');
+  } else if (msgLower.startsWith('modificar:') || msgLower.startsWith('modificar ')) {
+    twiml.message('Modificando informe...');
     res.type('text/xml').send(twiml.toString());
+    modificarDaily(from, msg);
+  } else if (msgLower === 'nueva conversacion' || msgLower === 'nueva conversacion' || msgLower === 'reset') {
+    chatHistory[from] = [];
+    const twiml2 = new twilio.twiml.MessagingResponse();
+    twiml2.message('Conversacion reiniciada.');
+    res.type('text/xml').send(twiml2.toString());
+  } else {
+    twiml.message('Procesando...');
+    res.type('text/xml').send(twiml.toString());
+    chat(from, msg);
   }
 });
 
@@ -100,9 +116,82 @@ async function generateDaily(to) {
     });
     const data = await resp.json();
     const text = data.content ? data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('') : JSON.stringify(data);
+
+    // Guardar el daily en memoria
+    dailyMemory[to] = text.trim();
+
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     await client.messages.create({ from: 'whatsapp:+14155238886', to: to, body: text.trim().substring(0, 1500) });
-  } catch (err) { console.error('Error:', err); }
+  } catch (err) { console.error('Error generateDaily:', err); }
+}
+
+async function modificarDaily(to, instruccion) {
+  const dailyAnterior = dailyMemory[to];
+
+  if (!dailyAnterior) {
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    await client.messages.create({ from: 'whatsapp:+14155238886', to: to, body: 'No hay un informe generado todavia. Escribi daily primero.' });
+    return;
+  }
+
+  const prompt = 'Tenes este informe diario de mercado argentino:\n\n' + dailyAnterior + '\n\nEl usuario pide: ' + instruccion + '\n\nDevolvelo modificado manteniendo exactamente el mismo formato y estilo. Sin aclaraciones, directo el informe.';
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await resp.json();
+    const text = data.content ? data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('') : JSON.stringify(data);
+
+    // Actualizar memoria con el daily modificado
+    dailyMemory[to] = text.trim();
+
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    await client.messages.create({ from: 'whatsapp:+14155238886', to: to, body: text.trim().substring(0, 1500) });
+  } catch (err) { console.error('Error modificarDaily:', err); }
+}
+
+async function chat(to, mensaje) {
+  // Inicializar historial si no existe
+  if (!chatHistory[to]) chatHistory[to] = [];
+
+  // Agregar contexto del daily si existe
+  const systemPrompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia. Conoces a fondo el mercado local: Rofex, bonos soberanos, Lecaps, cauciones, dolar CCL/blue/oficial, BCRA, riesgo pais. Respondas de forma directa, precisa y con criterio de mercado. Sin vueltas. Tono profesional pero conversacional. Maximo 5 lineas por respuesta salvo que te pidan algo largo.' + (dailyMemory[to] ? '\n\nEl informe de hoy que ya generaste es:\n' + dailyMemory[to] : '');
+
+  // Agregar mensaje del usuario al historial
+  chatHistory[to].push({ role: 'user', content: mensaje });
+
+  // Mantener historial de max 10 mensajes para no explotar el contexto
+  if (chatHistory[to].length > 10) {
+    chatHistory[to] = chatHistory[to].slice(-10);
+  }
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        system: systemPrompt,
+        messages: chatHistory[to]
+      })
+    });
+    const data = await resp.json();
+    const text = data.content ? data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('') : JSON.stringify(data);
+
+    // Guardar respuesta en historial
+    chatHistory[to].push({ role: 'assistant', content: text.trim() });
+
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    await client.messages.create({ from: 'whatsapp:+14155238886', to: to, body: text.trim().substring(0, 1500) });
+  } catch (err) { console.error('Error chat:', err); }
 }
 
 const PORT = process.env.PORT || 8000;
