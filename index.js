@@ -19,38 +19,53 @@ app.post('/webhook', async (req, res) => {
 
 async function getPrimaryToken() {
   try {
-    const r = await fetch('http://api.remarkets.primary.com.ar/auth/getToken', {
+    const r = await fetch('https://api.remarkets.primary.com.ar/auth/getToken', {
       method: 'POST',
       headers: { 'X-Username': process.env.PRIMARY_USER, 'X-Password': process.env.PRIMARY_PASS }
     });
-    const t = r.headers.get('X-Auth-Token');
-    return t || null;
+    return r.headers.get('X-Auth-Token') || null;
   } catch(e) { return null; }
 }
 
-async function getPrice(token, symbol) {
+async function getPrice(token, symbol, entries) {
   try {
-    const r = await fetch('http://api.remarkets.primary.com.ar/rest/marketdata/get?marketId=ROFX&symbol=' + encodeURIComponent(symbol) + '&entries=LA,OI,TV&level=1', {
+    const e = entries || 'SE,LA,CL';
+    const r = await fetch('https://api.remarkets.primary.com.ar/rest/marketdata/get?marketId=ROFX&symbol=' + encodeURIComponent(symbol) + '&entries=' + e + '&level=1', {
       headers: { 'X-Auth-Token': token }
     });
     const d = await r.json();
-    const la = d.marketData && d.marketData.LA;
-    return la && la.price ? la.price : null;
+    const md = d.marketData;
+    if (!md) return null;
+    // Prioridad: LA (tiempo real) > SE (settlement futuros) > CL (cierre bonos)
+    const p = md.LA || md.SE || md.CL;
+    return p && p.price ? p.price : null;
+  } catch(e) { return null; }
+}
+
+async function getOI(token, symbol) {
+  try {
+    const r = await fetch('https://api.remarkets.primary.com.ar/rest/marketdata/get?marketId=ROFX&symbol=' + encodeURIComponent(symbol) + '&entries=OI&level=1', {
+      headers: { 'X-Auth-Token': token }
+    });
+    const d = await r.json();
+    return d.marketData && d.marketData.OI ? d.marketData.OI.size : null;
   } catch(e) { return null; }
 }
 
 async function getMarketData() {
   const token = await getPrimaryToken();
   if (!token) return null;
-  const [rofexAbr, rofexMay, al30, gd35, caucMay, s30n6] = await Promise.all([
-    getPrice(token, 'DLR/ABR26'),
-    getPrice(token, 'DLR/MAY26'),
-    getPrice(token, 'AL30D/CI'),
-    getPrice(token, 'GD35D/24hs'),
-    getPrice(token, 'CAUC/MAY26'),
-    getPrice(token, 'S30N6/24hs')
+  const [rofexAbr, rofexMay, rofexJun, al30, gd35, caucMay, s30n6, oiAbr] = await Promise.all([
+    getPrice(token, 'DLR/ABR26', 'SE,LA'),
+    getPrice(token, 'DLR/MAY26', 'SE,LA'),
+    getPrice(token, 'DLR/JUN26', 'SE,LA'),
+    getPrice(token, 'AL30D/CI', 'LA,CL,SE'),
+    getPrice(token, 'GD35D/24hs', 'LA,CL,SE'),
+    getPrice(token, 'CAUC/MAY26', 'SE,LA'),
+    getPrice(token, 'S30N6/24hs', 'LA,CL,SE'),
+    getOI(token, 'DLR/ABR26')
   ]);
-  return { rofexAbr, rofexMay, al30, gd35, caucMay, s30n6 };
+  return { rofexAbr, rofexMay, rofexJun, al30, gd35, caucMay, s30n6, oiAbr };
 }
 
 async function generateDaily(to) {
@@ -58,16 +73,20 @@ async function generateDaily(to) {
   const fecha = d.getDate() + '/' + (d.getMonth() + 1);
   const mkt = await getMarketData();
 
-  const mktStr = mkt ? [
-    mkt.rofexAbr ? 'Rofex ABR26: $' + mkt.rofexAbr : '',
-    mkt.rofexMay ? 'Rofex MAY26: $' + mkt.rofexMay : '',
-    mkt.al30 ? 'AL30: USD ' + mkt.al30 : '',
-    mkt.gd35 ? 'GD35: USD ' + mkt.gd35 : '',
-    mkt.caucMay ? 'Caucion MAY26: ' + mkt.caucMay + '%' : '',
-    mkt.s30n6 ? 'Lecap S30N6: ' + mkt.s30n6 : ''
-  ].filter(Boolean).join(' | ') : '';
+  let mktStr = 'Datos de mercado no disponibles';
+  if (mkt) {
+    const lines = [];
+    if (mkt.rofexAbr) lines.push('Rofex ABR26: $' + mkt.rofexAbr + (mkt.oiAbr ? ' | OI: ' + mkt.oiAbr : ''));
+    if (mkt.rofexMay) lines.push('Rofex MAY26: $' + mkt.rofexMay);
+    if (mkt.rofexJun) lines.push('Rofex JUN26: $' + mkt.rofexJun);
+    if (mkt.al30) lines.push('AL30: USD ' + mkt.al30);
+    if (mkt.gd35) lines.push('GD35: USD ' + mkt.gd35);
+    if (mkt.caucMay) lines.push('Cauc MAY26: ' + mkt.caucMay + '%');
+    if (mkt.s30n6) lines.push('Lecap S30N6: ' + mkt.s30n6);
+    mktStr = lines.join('\n');
+  }
 
-  const prompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia. Fecha: ' + fecha + '. Datos exactos de mercado del ultimo cierre:\n' + mktStr + '\n\nCon estos datos y buscando en la web (Ambito, Cronista, Infobae, iProfesional) genera un informe de 7 lineas MAXIMO para clientes corporativos sofisticados.\n\nNo seas un robot que lista datos. Se un analista que INTERPRETA: que implica la curva de Rofex para el carry? Los bonos estan caros o baratos vs emergentes? Hay tension de tasas o calma? Que dice el mercado que no dice la macro oficial?\n\nFormato sin markdown:\nINFORME DIARIO ' + fecha + '\n[Lectura del mercado hoy - una oracion que diga algo que valga la pena]\nDolar: oficial $X | CCL $X | blue $X | brecha X%\nTasas/Rofex: cauciones X% | Lecap X% | Rofex ABR $X (dev X% TNA) | carry: X\nBonos: AL30 $X | GD35 $X | riesgo pais X bps | [lectura rapida]\nBCRA: compro USD X M | acum USD X.XXX M | reservas USD XX.XXX M\n[Contexto politico o macro que mueva el amperimetro hoy]\n\nTono: Bloomberg en espanol. Preciso, directo, con criterio. Sin relleno.';
+  const prompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia. Fecha: ' + fecha + '.\n\nDatos exactos del ultimo cierre via API de mercado:\n' + mktStr + '\n\nBusca en la web (Ambito, Cronista, Infobae, iProfesional) para completar: dolar oficial, CCL, blue, BCRA compras/reservas, riesgo pais, noticias politicas relevantes.\n\nGenera un informe de MAXIMO 7 lineas. No listes datos como un robot. Interpreta: que implica la curva de Rofex para el carry? Los bonos estan caros o baratos? Hay tension o calma en tasas? Que dice el mercado que no dice la macro oficial? Si hay algo importante politico o de funcionarios que impacte en mercado, ponelo.\n\nFormato sin markdown, max 7 lineas:\nINFORME DIARIO ' + fecha + '\n[Lectura del mercado - algo que valga la pena, no un dato]\nDolar: oficial $X | CCL $X | blue $X | brecha X%\nTasas: cauciones X% | Lecap X% | carry: [positivo/neutro/negativo]\nRofex: ABR $X | MAY $X | dev.impl ABR X% TNA | OI: X\nBonos: AL30 $X | GD35 $X | riesgo pais X bps\nBCRA/Macro: [compras + reservas + noticia clave del dia]\n\nTono Bloomberg. Preciso. Con criterio. Sin relleno.';
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
