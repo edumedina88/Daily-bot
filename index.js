@@ -11,6 +11,26 @@ const reminders = [];
 const TU_NUMERO = 'whatsapp:+5491163033654';
 const TWILIO_NUMBER = 'whatsapp:+14155238886';
 
+// Instrumentos por categoria
+const INSTRUMENTOS = {
+  tasaFija: ['TZXM6','S17A6','S30A6','S15Y6','S29Y6','T30J6','S31L6','S31G6','S30S6','S30O6','S30N6','T15E7','T30A7','T31Y7','T30J7'],
+  boncer: ['X15Y6','X29Y6','TZX26','X31L6','X30S6','TZXO6','TX26','X30N6','TZXD6','TZXM7','TZXA7','TZXY7','TZX27','TZXD7','TZX28','TX28','TX31','DICP','PARP'],
+  duales: ['TTJ26','TTS26','TTD26'],
+  hardDolar: ['GD29','GD30','GD35','GD38','GD41','GD46','AO27','BPY26','BPOA7','BPOB7','BPOC7','BPOD7','BPOA8','BPOB8','AL29','AN29','AL30','AL35','AE38','AL41'],
+  cauciones: ['CAUC/1D','CAUC/7D','CAUC/30D','CAUCUSD/1D','CAUCUSD/7D','CAUCUSD/30D']
+};
+
+// Detectar categoria de la pregunta
+function detectarCategoria(msg) {
+  const m = msg.toLowerCase();
+  if (m.includes('lecap') || m.includes('tasa fija') || m.includes('s30n') || m.includes('tzx')) return 'tasaFija';
+  if (m.includes('boncer') || m.includes('cer') || m.includes('inflacion') || m.includes('tx26') || m.includes('tzx26')) return 'boncer';
+  if (m.includes('dual') || m.includes('ttj') || m.includes('tts')) return 'duales';
+  if (m.includes('hard') || m.includes('dolar') || m.includes('global') || m.includes('bonar') || m.includes('gd30') || m.includes('al30') || m.includes('gd35') || m.includes('ae38')) return 'hardDolar';
+  if (m.includes('caucion') || m.includes('cauciones') || m.includes('repo')) return 'cauciones';
+  return null;
+}
+
 setInterval(async function() {
   const now = new Date();
   const diaSemana = now.getUTCDay();
@@ -70,11 +90,11 @@ app.post('/webhook', async (req, res) => {
     twiml.message('Conversacion reiniciada.');
     res.type('text/xml').send(twiml.toString());
   } else if (msgLower === 'ayuda' || msgLower === 'help') {
-    const ayuda = 'Comandos:\n\ndaily - Informe de mercado\nmodificar: [cambio] - Editar daily\nguardar cliente: nombre, tel, notas\nclientes - Ver tus clientes\nrecordar: [cuando] [que]\nrecordatorios - Ver pendientes\nreset - Nueva conversacion\n\nO escribime cualquier pregunta de mercado.';
+    const ayuda = 'Comandos:\n\ndaily - Informe de mercado\nmodificar: [cambio] - Editar daily\nguardar cliente: nombre, tel, notas\nclientes - Ver tus clientes\nrecordar: [cuando] [que]\nrecordatorios - Ver pendientes\nreset - Nueva conversacion\n\nPreguntas de mercado:\nlecaps / tasa fija\nbonceres / cer\nduales\nbonos dolar / globales\ncauciones\n\nO cualquier pregunta libre.';
     twiml.message(ayuda);
     res.type('text/xml').send(twiml.toString());
   } else {
-    twiml.message('Procesando...');
+    twiml.message('Consultando...');
     res.type('text/xml').send(twiml.toString());
     chat(from, msg);
   }
@@ -112,6 +132,24 @@ async function getOI(token, symbol) {
     const d = await r.json();
     return d.marketData && d.marketData.OI ? d.marketData.OI.size : null;
   } catch(e) { return null; }
+}
+
+async function getPreciosCategoria(categoria) {
+  const token = await getPrimaryToken();
+  if (!token) return null;
+  const tickers = INSTRUMENTOS[categoria];
+  if (!tickers) return null;
+
+  const resultados = await Promise.all(tickers.map(async function(ticker) {
+    let simbolo = ticker;
+    if (categoria === 'hardDolar') simbolo = ticker + 'D/24hs';
+    else if (categoria === 'boncer' || categoria === 'tasaFija' || categoria === 'duales') simbolo = ticker + '/24hs';
+    else if (categoria === 'cauciones') simbolo = ticker;
+    const precio = await getPrice(token, simbolo, 'SE,LA,CL');
+    return precio ? { ticker: ticker, precio: precio } : null;
+  }));
+
+  return resultados.filter(function(r) { return r !== null; });
 }
 
 async function getMarketData() {
@@ -257,15 +295,39 @@ async function listarRecordatorios(to) {
 
 async function chat(to, mensaje) {
   if (!chatHistory[to]) chatHistory[to] = [];
+
+  // Detectar si la pregunta es sobre una categoria de instrumentos
+  const categoria = detectarCategoria(mensaje);
+  let datosMarket = '';
+
+  if (categoria) {
+    const precios = await getPreciosCategoria(categoria);
+    if (precios && precios.length > 0) {
+      datosMarket = '\n\nDatos en tiempo real de Primary Markets para ' + categoria + ':\n';
+      precios.forEach(function(p) {
+        datosMarket += p.ticker + ': ' + p.precio + '\n';
+      });
+    }
+  }
+
   const clientesStr = crmData[to] && crmData[to].length > 0 ? '\n\nClientes en CRM: ' + JSON.stringify(crmData[to]) : '';
-  const systemPrompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia y asistente personal. Conoces el mercado local: Rofex, bonos soberanos, Lecaps, cauciones, dolar CCL/blue/oficial, BCRA, riesgo pais. Respondas directo, preciso, con criterio. Maximo 5 lineas salvo que pidan algo largo.' + (dailyMemory[to] ? '\n\nInforme de hoy: ' + dailyMemory[to] : '') + clientesStr;
-  chatHistory[to].push({ role: 'user', content: mensaje });
+  const systemPrompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia y asistente personal. Conoces el mercado local: Rofex, bonos soberanos, Lecaps, cauciones, dolar CCL/blue/oficial, BCRA, riesgo pais. Cuando tengas datos de Primary Markets usalos como fuente principal. Busca en la web para complementar con contexto. Respondas directo, preciso, con criterio. Maximo 5 lineas salvo que pidan algo largo.' + (dailyMemory[to] ? '\n\nInforme de hoy: ' + dailyMemory[to] : '') + clientesStr;
+
+  const mensajeConDatos = datosMarket ? mensaje + datosMarket : mensaje;
+  chatHistory[to].push({ role: 'user', content: mensajeConDatos });
   if (chatHistory[to].length > 10) chatHistory[to] = chatHistory[to].slice(-10);
+
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 500, system: systemPrompt, messages: chatHistory[to] })
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        system: systemPrompt,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        messages: chatHistory[to]
+      })
     });
     const data = await resp.json();
     const text = data.content ? data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('') : JSON.stringify(data);
