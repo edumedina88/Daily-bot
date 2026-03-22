@@ -24,7 +24,7 @@ async function generateDaily(to) {
 
   const prompt = `Sos un analista de mesa de dinero argentina. Hoy es ${today}. Generar informe diario corto para WhatsApp buscando datos reales en la web. Formato:
 
-DAILY - ${today}
+INFORME DIARIO - ${today}
 Mesa de Dinero
 
 BCRA
@@ -49,7 +49,7 @@ NOTICIAS
 - noticia 2
 - noticia 3
 
-Mesa de Dinero - uso exclusivo clientes`;
+Saludos;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
