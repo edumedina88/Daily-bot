@@ -36,7 +36,6 @@ async function getPrice(token, symbol, entries) {
     const d = await r.json();
     const md = d.marketData;
     if (!md) return null;
-    // Prioridad: LA (tiempo real) > SE (settlement futuros) > CL (cierre bonos)
     const p = md.LA || md.SE || md.CL;
     return p && p.price ? p.price : null;
   } catch(e) { return null; }
@@ -86,7 +85,7 @@ async function generateDaily(to) {
     mktStr = lines.join('\n');
   }
 
-  const prompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia. Fecha: ' + fecha + '.\n\nDatos exactos del ultimo cierre via API de mercado:\n' + mktStr + '\n\nBusca en la web (Ambito, Cronista, Infobae, iProfesional) para completar: dolar oficial, CCL, blue, BCRA compras/reservas, riesgo pais, noticias politicas relevantes.\n\nGenera un informe de MAXIMO 7 lineas. No listes datos como un robot. Interpreta: que implica la curva de Rofex para el carry? Los bonos estan caros o baratos? Hay tension o calma en tasas? Que dice el mercado que no dice la macro oficial? Si hay algo importante politico o de funcionarios que impacte en mercado, ponelo.\n\nFormato sin markdown, max 7 lineas:\nINFORME DIARIO ' + fecha + '\n[Lectura del mercado - algo que valga la pena, no un dato]\nDolar: oficial $X | CCL $X | blue $X | brecha X%\nTasas: cauciones X% | Lecap X% | carry: [positivo/neutro/negativo]\nRofex: ABR $X | MAY $X | dev.impl ABR X% TNA | OI: X\nBonos: AL30 $X | GD35 $X | riesgo pais X bps\nBCRA/Macro: [compras + reservas + noticia clave del dia]\n\nTono Bloomberg. Preciso. Con criterio. Sin relleno.';
+  const prompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia. Fecha: ' + fecha + '.\n\nDatos exactos del ultimo cierre via API de mercado:\n' + mktStr + '\n\nBusca en la web (Ambito, Cronista, Infobae, iProfesional) para completar: dolar oficial, CCL, blue, BCRA compras/reservas, riesgo pais, noticias politicas relevantes.\n\nGenera un informe de MAXIMO 7 lineas. No listes datos como un robot. Interpreta: que implica la curva de Rofex para el carry? Los bonos estan caros o baratos? Hay tension o calma en tasas? Que dice el mercado que no dice la macro oficial? Si hay algo importante politico o de funcionarios que impacte en mercado, ponelo.\n\nNo incluyas ninguna aclaracion sobre fuentes de datos ni como obtuviste la informacion. Arranca directo con el informe.\n\nFormato sin markdown, iconos discretos y profesionales, max 7 lineas:\n📊 INFORME DIARIO ' + fecha + '\n[Lectura del mercado - algo que valga la pena, no un dato]\n💵 Dolar: oficial $X | CCL $X | blue $X | brecha X%\n📈 Tasas: cauciones X% | Lecap X% | carry: [positivo/neutro/negativo]\n🔮 Rofex: ABR $X | MAY $X | dev.impl ABR X% TNA | OI: X\n🏦 Bonos: AL30 $X | GD35 $X | riesgo pais X bps\n🗞 BCRA/Macro: [compras + reservas + noticia clave del dia]\n\nTono Bloomberg. Preciso. Con criterio. Sin relleno.';
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
