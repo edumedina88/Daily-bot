@@ -4,20 +4,17 @@ const twilio = require('twilio');
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-
 app.post('/webhook', async (req, res) => {
-  const message = req.body.Body?.trim().toLowerCase();
+  const message = (req.body.Body || '').trim().toLowerCase();
   const from = req.body.From;
   const twiml = new twilio.twiml.MessagingResponse();
 
   if (message === 'daily') {
-    twiml.message('⏳ Generando el daily, dame un momento...');
+    twiml.message('Generando el daily, dame un momento...');
     res.type('text/xml').send(twiml.toString());
-
     generateDaily(from);
   } else {
-    twiml.message('Escribí *daily* para recibir el informe del día 📊');
+    twiml.message('Escribi daily para recibir el informe del dia');
     res.type('text/xml').send(twiml.toString());
   }
 });
@@ -25,42 +22,41 @@ app.post('/webhook', async (req, res) => {
 async function generateDaily(to) {
   const today = new Date().toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: '2-digit' });
 
-  const prompt = `Sos un analista de mesa de dinero argentina. Hoy es ${today}.
-Generá un informe diario MUY CORTO para WhatsApp con búsqueda web. Formato exacto:
+  const prompt = `Sos un analista de mesa de dinero argentina. Hoy es ${today}. Generar informe diario corto para WhatsApp buscando datos reales en la web. Formato:
 
-📅 *DAILY – ${today}*
-_Mesa de Dinero_
+DAILY - ${today}
+Mesa de Dinero
 
-🏦 *BCRA*
-• Compra del día: USD X M | Acum. 2026: USD X.XXX M (X ruedas)
-• Reservas brutas: USD XX.XXX M
+BCRA
+- Compra del dia: USD X M | Acum. 2026: USD X.XXX M (X ruedas)
+- Reservas brutas: USD XX.XXX M
 
-💵 *CAMBIO*
-• Oficial $X.XXX | CCL $X.XXX | MEP $X.XXX | Blue $X.XXX
-• Banda sup: $X.XXX | Brecha CCL: ~X%
+CAMBIO
+- Oficial $X.XXX | CCL $X.XXX | MEP $X.XXX | Blue $X.XXX
+- Banda sup: $X.XXX | Brecha CCL: X%
 
-📈 *TASAS*
-• Cauciones 1d: ~X% TNA | Lecap corta: ~XX-XX% TNA
+TASAS
+- Cauciones 1d: X% TNA | Lecap corta: XX-XX% TNA
 
-📉 *MERCADO*
-• Riesgo país: XXX bps ▲▼X% | Bonos: [resumen en 3 palabras]
-• Rofex: [posición más cercana y tasa implícita de devaluación]
+ROFEX
+- Pos. cercana: $X.XXX (dev. impl. X% TNA)
 
-📰 *NOTICIAS*
-• [noticia política/económica clave 1]
-• [noticia política/económica clave 2]
-• [noticia política/económica clave 3]
+MERCADO
+- Riesgo pais: XXX bps | Bonos: resumen breve
 
-_Mesa de Dinero · uso exclusivo clientes_
+NOTICIAS
+- noticia 1
+- noticia 2
+- noticia 3
 
-Usá datos reales buscando en la web. Si un dato no está disponible poné s/d.`;
+Mesa de Dinero - uso exclusivo clientes`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
@@ -77,4 +73,14 @@ Usá datos reales buscando en la web. Si un dato no está disponible poné s/d.`
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     await client.messages.create({
       from: 'whatsapp:+14155238886',
-      to: to​​​​​​​​​​​​​​​​
+      to: to,
+      body: text.trim()
+    });
+
+  } catch (err) {
+    console.error('Error:', err);
+  }
+}
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log('Bot corriendo en puerto ' + PORT));
