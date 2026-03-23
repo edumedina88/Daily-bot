@@ -11,7 +11,6 @@ const reminders = [];
 const TU_NUMERO = 'whatsapp:+5491163033654';
 const TWILIO_NUMBER = 'whatsapp:+14155238886';
 
-// Chequear recordatorios cada minuto
 setInterval(async function() {
   const now = new Date();
   const horaArg = new Date(now.getTime() - 3 * 60 * 60 * 1000);
@@ -22,7 +21,6 @@ setInterval(async function() {
   for (let i = reminders.length - 1; i >= 0; i--) {
     const r = reminders[i];
     let disparar = false;
-
     if (r.tipo === 'unico') {
       if (now >= r.when) disparar = true;
     } else if (r.tipo === 'diario') {
@@ -32,7 +30,6 @@ setInterval(async function() {
     } else if (r.tipo === 'semanal') {
       if (diaActual === r.diaSemana && horaActual === r.hora && minutoActual === r.minuto) disparar = true;
     }
-
     if (disparar) {
       try {
         const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -43,7 +40,6 @@ setInterval(async function() {
   }
 }, 60000);
 
-// Daily automatico lunes a viernes a las 9am Argentina
 setInterval(async function() {
   const now = new Date();
   const horaArg = new Date(now.getTime() - 3 * 60 * 60 * 1000);
@@ -236,11 +232,12 @@ async function guardarCliente(to, msg) {
     });
     const data = await resp.json();
     const text = data.content ? data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('') : '{}';
-    const cliente = JSON.parse(text.trim());
+    const clean = text.trim().replace(/```json/g, '').replace(/```/g, '').trim();
+    const cliente = JSON.parse(clean);
     cliente.fechaAlta = new Date().toLocaleDateString('es-AR');
     crmData[to].push(cliente);
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    await client.messages.create({ from: TWILIO_NUMBER, to: to, body: 'Cliente guardado: ' + cliente.nombre + (cliente.empresa ? ' - ' + cliente.empresa : '') + (cliente.telefono ? '\nTel: ' + cliente.telefono : '') + (cliente.notas ? '\nNotas: ' + cliente.notas : '') });
+    await client.messages.create({ from: TWILIO_NUMBER, to: to, body: String.fromCodePoint(0x1F465) + ' Cliente guardado:\n' + cliente.nombre + (cliente.empresa ? ' - ' + cliente.empresa : '') + (cliente.telefono ? '\nTel: ' + cliente.telefono : '') + (cliente.notas ? '\nNotas: ' + cliente.notas : '') + (cliente.seguimiento ? '\nSeguimiento: ' + cliente.seguimiento : '') });
   } catch (err) { console.error('Error guardarCliente:', err); }
 }
 
@@ -251,16 +248,16 @@ async function listarClientes(to) {
     await client.messages.create({ from: TWILIO_NUMBER, to: to, body: 'No tenes clientes guardados. Usa "guardar cliente: nombre, tel, notas"' });
     return;
   }
-  let lista = 'Tus clientes (' + clientes.length + '):\n\n';
+  let lista = String.fromCodePoint(0x1F4CB) + ' Tus clientes (' + clientes.length + '):\n\n';
   clientes.forEach(function(c, i) {
-    lista += (i + 1) + '. ' + (c.nombre || 'Sin nombre') + (c.empresa ? ' - ' + c.empresa : '') + (c.telefono ? ' | ' + c.telefono : '') + '\n';
+    lista += (i + 1) + '. ' + (c.nombre || 'Sin nombre') + (c.empresa ? ' - ' + c.empresa : '') + (c.telefono ? ' | ' + c.telefono : '') + (c.notas ? '\n   ' + c.notas : '') + '\n\n';
   });
   await client.messages.create({ from: TWILIO_NUMBER, to: to, body: lista.substring(0, 1500) });
 }
 
 async function programarRecordatorio(to, msg) {
   const ahora = new Date().toISOString();
-  const prompt = 'El usuario quiere agendar esto: "' + msg + '"\nFecha y hora actual en Argentina: ' + ahora + ' (UTC-3)\n\nAnaliza si es:\n- "todos los dias" o "diario" → tipo: diario\n- "dias habiles" o "lunes a viernes" → tipo: habiles\n- un dia de la semana especifico ("el lunes", "los martes") → tipo: semanal\n- una fecha especifica o evento unico → tipo: unico\n\nDevolver SOLO JSON sin texto adicional:\n{"texto":"descripcion clara de la tarea","tipo":"diario|habiles|semanal|unico","hora":9,"minuto":0,"diaSemana":1,"cuando":"ISO 8601 solo si es unico","descripcionHumana":"cuando se va a recordar"}\n\nNota: diaSemana 0=domingo,1=lunes,...,6=sabado. hora y minuto en formato Argentina (UTC-3). Solo el JSON.';
+  const prompt = 'El usuario quiere agendar esto: "' + msg + '"\nFecha y hora actual en Argentina: ' + ahora + ' (UTC-3)\n\nAnaliza si es:\n- "todos los dias" o "diario" -> tipo: diario\n- "dias habiles" o "lunes a viernes" -> tipo: habiles\n- un dia de la semana especifico -> tipo: semanal\n- una fecha especifica o evento unico -> tipo: unico\n\nDevolver SOLO JSON sin texto adicional:\n{"texto":"descripcion clara de la tarea","tipo":"diario|habiles|semanal|unico","hora":9,"minuto":0,"diaSemana":1,"cuando":"ISO 8601 solo si es unico","descripcionHumana":"cuando se va a recordar en castellano"}\n\nNota: diaSemana 0=domingo,1=lunes,...,6=sabado. hora y minuto en horario Argentina. Solo el JSON.';
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -271,7 +268,7 @@ async function programarRecordatorio(to, msg) {
     const text = data.content ? data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('') : '{}';
     const clean = text.trim().replace(/```json/g, '').replace(/```/g, '').trim();
     const reminder = JSON.parse(clean);
-    const nuevoRecordatorio = {
+    reminders.push({
       to: to,
       texto: reminder.texto,
       tipo: reminder.tipo,
@@ -281,12 +278,9 @@ async function programarRecordatorio(to, msg) {
       when: reminder.cuando ? new Date(reminder.cuando) : null,
       descripcionHumana: reminder.descripcionHumana,
       id: Date.now()
-    };
-    reminders.push(nuevoRecordatorio);
-    const diasSemana = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-    let confirmacion = String.fromCodePoint(0x2705) + ' Agendado:\n' + reminder.texto + '\n' + String.fromCodePoint(0x1F4C5) + ' ' + reminder.descripcionHumana;
+    });
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    await client.messages.create({ from: TWILIO_NUMBER, to: to, body: confirmacion });
+    await client.messages.create({ from: TWILIO_NUMBER, to: to, body: String.fromCodePoint(0x2705) + ' Agendado:\n' + reminder.texto + '\n' + String.fromCodePoint(0x1F4C5) + ' ' + reminder.descripcionHumana });
   } catch (err) { console.error('Error recordatorio:', err); }
 }
 
@@ -297,7 +291,7 @@ async function listarRecordatorios(to) {
     await client.messages.create({ from: TWILIO_NUMBER, to: to, body: 'No tenes recordatorios pendientes.' });
     return;
   }
-  let lista = String.fromCodePoint(0x1F4CB) + ' Tus recordatorios (' + misRecordatorios.length + '):\n\n';
+  let lista = String.fromCodePoint(0x1F4CB) + ' Tus tareas (' + misRecordatorios.length + '):\n\n';
   misRecordatorios.forEach(function(r, i) {
     const tipoLabel = r.tipo === 'diario' ? 'Todos los dias' : r.tipo === 'habiles' ? 'Dias habiles' : r.tipo === 'semanal' ? 'Semanal' : 'Unico';
     lista += (i + 1) + '. ' + r.texto + '\n   ' + tipoLabel + ' a las ' + String(r.hora).padStart(2, '0') + ':' + String(r.minuto).padStart(2, '0') + '\n\n';
@@ -328,9 +322,9 @@ async function borrarRecordatorio(to, msg) {
 async function chat(to, mensaje) {
   if (!chatHistory[to]) chatHistory[to] = [];
   const misRecordatorios = reminders.filter(function(r) { return r.to === to; });
-  const recordatoriosStr = misRecordatorios.length > 0 ? '\n\nTareas pendientes del usuario:\n' + misRecordatorios.map(function(r, i) { return (i+1) + '. ' + r.texto + ' (' + r.tipo + ' ' + String(r.hora).padStart(2,'0') + ':' + String(r.minuto).padStart(2,'0') + ')'; }).join('\n') : '';
-  const clientesStr = crmData[to] && crmData[to].length > 0 ? '\n\nClientes en CRM: ' + JSON.stringify(crmData[to]) : '';
-  const systemPrompt = 'Sos un analista senior de mesa de dinero argentina con 20 anos de experiencia y asistente personal. Conoces el mercado local: Rofex, bonos soberanos, Lecaps, cauciones, dolar CCL/blue/oficial, BCRA, riesgo pais. Busca siempre informacion actual en la web antes de responder sobre mercados. Respondas directo, preciso, con criterio. Maximo 5 lineas salvo que pidan algo largo.' + (dailyMemory[to] ? '\n\nInforme de hoy: ' + dailyMemory[to] : '') + recordatoriosStr + clientesStr;
+  const recordatoriosStr = misRecordatorios.length > 0 ? '\n\nTareas y recordatorios del usuario:\n' + misRecordatorios.map(function(r, i) { return (i+1) + '. ' + r.texto + ' (' + r.tipo + ' ' + String(r.hora).padStart(2,'0') + ':' + String(r.minuto).padStart(2,'0') + ')'; }).join('\n') : '';
+  const clientesStr = crmData[to] && crmData[to].length > 0 ? '\n\nClientes en CRM:\n' + crmData[to].map(function(c, i) { return (i+1) + '. ' + c.nombre + (c.empresa ? ' - ' + c.empresa : '') + (c.telefono ? ' | ' + c.telefono : '') + (c.notas ? ' | ' + c.notas : ''); }).join('\n') : '';
+  const systemPrompt = 'Sos un asistente personal y analista senior de mesa de dinero argentina con 20 anos de experiencia. IMPORTANTE: SI tenes memoria y CRM - los datos de clientes y recordatorios se guardan en el sistema y se te pasan en este mismo mensaje. NUNCA digas que no tenes memoria ni que no podes guardar informacion - ESO ES FALSO. Si el usuario pide guardar algo, confirma que lo guardaste. Si pide ver clientes o tareas, mostra los datos que se te pasan. Conoces el mercado local: Rofex, bonos soberanos, Lecaps, cauciones, dolar CCL/blue/oficial, BCRA, riesgo pais. Busca en la web para info actual de mercado. Respondas directo, preciso, con criterio. Maximo 5 lineas salvo que pidan algo largo.' + (dailyMemory[to] ? '\n\nInforme de hoy: ' + dailyMemory[to] : '') + recordatoriosStr + clientesStr;
   chatHistory[to].push({ role: 'user', content: mensaje });
   if (chatHistory[to].length > 10) chatHistory[to] = chatHistory[to].slice(-10);
   try {
